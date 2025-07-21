@@ -64,14 +64,26 @@ namespace VNPE
             powerComp = GetComp<CompPowerTrader>();
             resourceComp = GetComp<CompResource>();
 
-            var adjCells = GenAdj.CellsAdjacentCardinal(this).ToList();
-            for (int i = 0; i < adjCells.Count; i++)
+            foreach (var cell in GenAdj.CellsAdjacentCardinal(this))
             {
-                if (adjCells[i].GetFirstBuilding(map) is Building h && h.TryGetComp<CompRegisterToGrinder>() != null) RegisterHopper(h);
+                Building h = cell.GetEdifice(map);
+                if (h != null && (h.IsHopper() || h.GetComp<CompRegisterToGrinder>() != null))
+                    RegisterHopper(h);
             }
+
+            Map.events.BuildingSpawned += OnBuildingSpawnedInMap;
+            Map.events.BuildingDespawned += OnBuildingDespawnedInMap;
 
             if (!respawningAfterLoad)
                 nextTick = Find.TickManager.TicksGame + produceTicksNeeded;
+        }
+
+        public override void DeSpawn(DestroyMode mode)
+        {
+            Map.events.BuildingDespawned -= OnBuildingDespawnedInMap;
+            Map.events.BuildingSpawned -= OnBuildingSpawnedInMap;
+
+            base.DeSpawn(mode);
         }
 
         protected override void Tick()
@@ -101,6 +113,30 @@ namespace VNPE
         public void UnregisterHopper(Thing hopper)
         {
             cachedHoppers.Remove(hopper);
+        }
+
+        private void OnBuildingSpawnedInMap(Building building)
+        {
+            if (!building.IsHopper() || building.GetComp<CompRegisterToGrinder>() != null)
+                return;
+
+            var hopperRect = building.OccupiedRect();
+            var rect = this.OccupiedRect();
+            var xRect = rect;
+            var zRect = rect;
+
+            --xRect.minX;
+            ++xRect.maxX;
+            --zRect.minZ;
+            ++zRect.maxZ;
+
+            if (hopperRect.Overlaps(xRect) || hopperRect.Overlaps(zRect))
+                RegisterHopper(building);
+        }
+
+        private void OnBuildingDespawnedInMap(Building building)
+        {
+            UnregisterHopper(building);
         }
 
         private Thing FindFeedInAnyHopper()
