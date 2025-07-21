@@ -104,51 +104,55 @@ namespace VNPE
                 cachedHoppers.Remove(hopper);
         }
 
-        private Thing FindFeedInAnyHopper()
+        private struct ThingWithCount
         {
-            for (int h = 0; h < cachedHoppers.Count; h++)
-            {
-                var thingList = cachedHoppers[h].Position.GetThingList(Map);
-                for (int t = 0; t < thingList.Count; ++t)
-                {
-                    Thing thing = thingList[t];
-                    if (Building_NutrientPasteDispenser.IsAcceptableFeedstock(thing.def))
-                        return thing;
-                }
-            }
-            return null;
+            public Thing thing;
+            public int count;
         }
 
-        private bool HasEnoughFeed()
+        // This returns the amount of nutrition still required to be satisfied.
+        private float FindFeedToSatisfyNutrition(float neededNutrition, List<ThingWithCount> feed)
         {
-            var map = Map;
-            var num = 0f;
+            var thingGrid = Map.thingGrid;
 
-            for (int h = 0; h < cachedHoppers.Count; h++)
+            foreach (var hopper in cachedHoppers)
             {
-                var things = cachedHoppers[h].Position.GetThingList(map);
-
-                for (int t = 0; t < things.Count; t++)
+                foreach (var cell in GenAdj.CellsOccupiedBy(hopper))
                 {
-                    var thing = things[t];
-                    if (Building_NutrientPasteDispenser.IsAcceptableFeedstock(thing.def))
+                    foreach (var thing in thingGrid.ThingsListAtFast(cell))
                     {
-                        num += thing.stackCount * thing.GetStatValue(StatDefOf.Nutrition);
+                        if (!Building_NutrientPasteDispenser.IsAcceptableFeedstock(thing.def))
+                            continue;
+
+                        var nutritionOfThing = thing.GetStatValue(StatDefOf.Nutrition);
+                        var count = Mathf.Min(thing.stackCount, Mathf.Ceil(neededNutrition / nutritionOfThing));
+                        var nutritionOfStack = nutritionOfThing * count;
+
+                        feed.Add(new ThingWithCount{thing = thing, count = (int) count});
+
+                        neededNutrition -= nutritionOfStack;
+
+                        if (neededNutrition <= 0f)
+                        {
+                            return neededNutrition;
+                        }
                     }
                 }
-
-                if (num >= def.building.nutritionCostPerDispense)
-                    return true;
             }
 
-            return false;
+            return neededNutrition;
         }
 
         private bool TryProducePaste()
         {
             var net = resourceComp.PipeNet;
 
-            if (net == null || net.AvailableCapacity < 1 || !HasEnoughFeed())
+            if (net == null || net.AvailableCapacity < 1)
+                return false;
+
+            var feedStacks = new List<ThingWithCount>();
+
+            if (FindFeedToSatisfyNutrition(def.building.nutritionCostPerDispense - 0.00001f, feedStacks) > 0f)
                 return false;
 
             var comps = new List<CompRegisterIngredients>();
@@ -160,22 +164,12 @@ namespace VNPE
             }
             var compsCount = comps.Count;
 
-            var num = def.building.nutritionCostPerDispense - 0.00001f;
-            while (num > 0)
+            foreach (var feed in feedStacks)
             {
-                var feed = FindFeedInAnyHopper();
-                if (feed == null)
-                {
-                    Log.Error("Did not find enough food in hoppers while trying to grind.");
-                    return false;
-                }
-
                 for (int i = 0; i < compsCount; i++)
-                    comps[i].RegisterIngredient(feed.def);
+                    comps[i].RegisterIngredient(feed.thing.def);
 
-                var count = Mathf.Min(feed.stackCount, Mathf.CeilToInt(num / feed.GetStatValue(StatDefOf.Nutrition)));
-                num -= count * feed.GetStatValue(StatDefOf.Nutrition);
-                feed.SplitOff(count);
+                feed.thing.SplitOff(feed.count);
             }
 
             net.DistributeAmongStorage(1);
